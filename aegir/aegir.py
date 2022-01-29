@@ -1,22 +1,35 @@
 import ast
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Set
 
 from aegir.cogs.cog import Cog
 from aegir.command import Command
 from aegir.event import Event
-from aegir.exceptions import InvalidDirPath
+from aegir.exceptions import InvalidDirPath, PlainAsyncFunc
+from aegir.task import Task
 
 
 class Aegir:
-    def __init__(self, dir_path: str):
+    def __init__(self, dir_path: str, subclass_name: str = ""):
+        """
+
+        Parameters
+        ----------
+        dir_path
+        subclass_name: str
+            What your bot subclass is called
+        """
         self._dir_path: Path = Path(dir_path).absolute()
 
         self.has_imported_nextcord: bool = False
         self.has_imported_nextcord_commands: bool = False
         self._cogs: List[Cog] = []
         self._instance_name: str = ""
-        self._main_file: List[Event, Command] = []
+        self._main_file: List[Event, Command, Task] = []
+
+        self._possible_bot_classes: Set = {"Bot", "Client"}
+        if subclass_name:
+            self._possible_bot_classes.add(subclass_name)
 
         if not self._dir_path.exists():
             raise InvalidDirPath
@@ -45,15 +58,28 @@ class Aegir:
 
         raise NotImplementedError
 
-    def as_command_or_event(self, _ast: ast.AsyncFunctionDef) -> Union[Command, Event]:
+    def as_command_or_event(
+        self, _ast: ast.AsyncFunctionDef
+    ) -> Union[Command, Event, Task]:
+        if not _ast.decorator_list:
+            raise PlainAsyncFunc
+
         for i, decor in enumerate(_ast.decorator_list):
-            func_name = self.as_attr_or_name(decor.func)  # type: ignore
+            if isinstance(decor, ast.Attribute):
+                func_name = self.as_attr_or_name(decor)
+            else:
+                func_name = self.as_attr_or_name(decor.func)  # type: ignore
             if func_name == "event":
                 _ast.decorator_list.pop(i)
                 return Event.from_ast(_ast)
             elif func_name == "command":
                 _ast.decorator_list.pop(i)
                 return Command.from_ast(_ast)
+            elif func_name == "loop":
+                _ast.decorator_list.pop(i)
+                return Task.from_ast(_ast)
+
+            # TODO before_loop, after_loop, before_invoke, after_invoke
 
         raise NotImplementedError
 
@@ -63,6 +89,10 @@ class Aegir:
         return _ast.names[0].name
 
     def parse_ast(self, _ast):
+        if hasattr(_ast, "__iter__"):
+            for new_ast in _ast:
+                self.parse_ast(new_ast)
+
         if isinstance(_ast, (ast.Import, ast.ImportFrom)):
             imported = self.resolve_imported(_ast)
             if imported == "nextcord":
@@ -77,15 +107,27 @@ class Aegir:
                 self.parse_ast(_new_ast)
 
         elif isinstance(_ast, ast.Assign):
-            var_name = _ast.targets[0].id
-            value_func = _ast.value.func
-            value = self.as_attr_or_name(value_func)
+            var_name = self.as_attr_or_name(_ast.targets[0])  # type: ignore
+            if not isinstance(_ast.value, ast.Call):
+                # Don't need constants n such
+                return
 
-            if value in {"Bot", "Client"}:
+            value_func = _ast.value.func
+
+            value = self.as_attr_or_name(value_func)  # type: ignore
+
+            if value in self._possible_bot_classes:
                 self._instance_name = var_name
 
         elif isinstance(_ast, ast.AsyncFunctionDef):
-            event_or_command = self.as_command_or_event(_ast)
+            try:
+                event_or_command = self.as_command_or_event(_ast)
+            except PlainAsyncFunc:
+                # async def main():
+                self.parse_ast(_ast.body)
+                return
+            except NotImplementedError:
+                return
             self._main_file.append(event_or_command)
 
     def convert(self):

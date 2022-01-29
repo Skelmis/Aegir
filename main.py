@@ -1,3 +1,3 @@
 from aegir import Aegir
 
-Aegir("test").convert()
+Aegir("test", "Pyro").convert()
