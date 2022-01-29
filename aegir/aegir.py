@@ -103,8 +103,7 @@ class Aegir:
 
         elif isinstance(_ast, ast.If):
             # __name__ == "__main__"
-            for _new_ast in _ast.body:
-                self.parse_ast(_new_ast)
+            self.parse_ast(_ast.body)
 
         elif isinstance(_ast, ast.Assign):
             var_name = self.as_attr_or_name(_ast.targets[0])  # type: ignore
