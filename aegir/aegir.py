@@ -34,6 +34,8 @@ class Aegir:
         if not self._dir_path.exists():
             raise InvalidDirPath
 
+        self.has_been_converted: bool = False
+
     def __repr__(self):
         return (
             f"<Aegir, instance_name={self._instance_name}, "
@@ -41,6 +43,18 @@ class Aegir:
             f"has_imported_nextcord_commands={self.has_imported_nextcord_commands}, "
             f"main_file={self._main_file}, cogs={self._cogs}>"
         )
+
+    @property
+    def events(self) -> List[Event]:
+        return [i for i in self._main_file if isinstance(i, Event)]
+
+    @property
+    def commands(self) -> List[Command]:
+        return [i for i in self._main_file if isinstance(i, Command)]
+
+    @property
+    def tasks(self) -> List[Task]:
+        return [i for i in self._main_file if isinstance(i, Task)]
 
     @staticmethod
     def as_ast(file_path: Path) -> ast.Module:
@@ -87,7 +101,7 @@ class Aegir:
             _ast.decorator_list.pop(i)
             return obj.from_ast(_ast)
 
-            # TODO before_loop, after_loop, before_invoke, after_invoke
+            # TODO before_invoke, after_invoke
 
         raise NotImplementedError
 
@@ -177,5 +191,6 @@ class Aegir:
                 self.parse_ast(_ast)
 
         self.hook_tasks()
+        self.has_been_converted = True
 
         print(repr(self))
