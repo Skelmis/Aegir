@@ -1,18 +1,17 @@
 import ast
 from pathlib import Path
-from typing import List, Union, Set
+from typing import List, Union, Set, Dict
 
 from aegir.cogs.cog import Cog
 from aegir.command import Command
 from aegir.event import Event
 from aegir.exceptions import InvalidDirPath, PlainAsyncFunc
-from aegir.task import Task
+from aegir.task import Task, BeforeLoop, AfterLoop
 
 
 class Aegir:
     def __init__(self, dir_path: str, subclass_name: str = ""):
         """
-
         Parameters
         ----------
         dir_path
@@ -26,6 +25,7 @@ class Aegir:
         self._cogs: List[Cog] = []
         self._instance_name: str = ""
         self._main_file: List[Event, Command, Task] = []
+        self._task_hooks: Dict[str, List[Union[BeforeLoop, AfterLoop]]] = {}
 
         self._possible_bot_classes: Set = {"Bot", "Client"}
         if subclass_name:
@@ -60,7 +60,7 @@ class Aegir:
 
     def as_command_or_event(
         self, _ast: ast.AsyncFunctionDef
-    ) -> Union[Command, Event, Task]:
+    ) -> Union[Command, Event, Task, BeforeLoop, AfterLoop]:
         if not _ast.decorator_list:
             raise PlainAsyncFunc
 
@@ -69,15 +69,23 @@ class Aegir:
                 func_name = self.as_attr_or_name(decor)
             else:
                 func_name = self.as_attr_or_name(decor.func)  # type: ignore
+
             if func_name == "event":
-                _ast.decorator_list.pop(i)
-                return Event.from_ast(_ast)
+                obj = Event
             elif func_name == "command":
-                _ast.decorator_list.pop(i)
-                return Command.from_ast(_ast)
+                obj = Command
             elif func_name == "loop":
-                _ast.decorator_list.pop(i)
-                return Task.from_ast(_ast)
+                obj = Task
+            elif func_name == "before_loop":
+                return BeforeLoop.from_ast(_ast, decor)
+            elif func_name == "after_loop":
+                return AfterLoop.from_ast(_ast, decor)
+            # TODO Handle both command error and task error
+            else:
+                continue
+
+            _ast.decorator_list.pop(i)
+            return obj.from_ast(_ast)
 
             # TODO before_loop, after_loop, before_invoke, after_invoke
 
@@ -127,12 +135,47 @@ class Aegir:
                 return
             except NotImplementedError:
                 return
-            self._main_file.append(event_or_command)
+
+            if isinstance(event_or_command, (BeforeLoop, AfterLoop)):
+                try:
+                    self._task_hooks[event_or_command.associated_task].append(
+                        event_or_command
+                    )
+                except KeyError:
+                    self._task_hooks[event_or_command.associated_task] = [
+                        event_or_command
+                    ]
+            else:
+                self._main_file.append(event_or_command)
+
+    def hook_tasks(self):
+        """Takes BeforeLoop's and AfterLoop's and
+        hooks them into the relevant tasks.
+        """
+        for item in self._main_file:
+            if not isinstance(item, Task):
+                continue
+
+            task_name = item.task_name
+            try:
+                loops = self._task_hooks[task_name]
+            except KeyError:
+                continue
+
+            assert len(loops) in {0, 1, 2}
+
+            for invoke in loops:
+                if isinstance(invoke, BeforeLoop):
+                    item.before_loop = invoke
+                else:
+                    item.after_loop = invoke
 
     def convert(self):
         for file in self._dir_path.glob("**/*.py"):
             ast_module = self.as_ast(file)
             for _ast in ast_module.body:
                 self.parse_ast(_ast)
+
+        self.hook_tasks()
 
         print(repr(self))
