@@ -4,6 +4,7 @@ from typing import List, Optional, Union, cast
 import libcst
 from libcst import BaseExpression
 
+from aegir import FormatError
 from aegir.bot_items import MainFile
 from aegir.bot_items.command import Command
 from aegir.bot_items.event import Event
@@ -40,7 +41,8 @@ class Aegir:
         tree = libcst.parse_module(source)
         return tree
 
-    def parse_out_import(self, cst: libcst.Import) -> Import:
+    @staticmethod
+    def parse_out_import(cst: libcst.Import) -> Import:
         """Given an Import return the imported module name"""
         entries: List[ImportEntry] = []
         for item in cst.names:
@@ -107,4 +109,13 @@ class Aegir:
 
         self.has_been_converted = True
 
-        print(repr(self))
+    @property
+    def errors(self) -> List[FormatError]:
+        errors: List[FormatError] = []
+        for event in self._main_file.events:
+            errors.extend(event.errors)
+
+        for command in self._main_file.commands:
+            errors.extend(command.errors)
+
+        return errors

@@ -28,8 +28,8 @@ class MainFile:
         self._cog_path: Optional[Path] = cog_path
         self._backref: Aegir = backref
         self._bot_variable: str = bot_variable
-        self._events: List[Event, Listener] = []
-        self._commands: List[Command] = []
+        self.events: List[Event, Listener] = []
+        self.commands: List[Command] = []
 
         self.file_cst: Optional[libcst.Module] = None
         self.__run_mode: RunMode = RunMode.unknown
@@ -94,14 +94,12 @@ class MainFile:
                     Command, Event, Listener, None
                 ] = self.parse_for_possible_event_or_command(nest)
                 if isinstance(action, Command):
-                    self._commands.append(action)
+                    self.commands.append(action)
                 elif isinstance(action, (Event, Listener)):
-                    self._events.append(action)
+                    self.events.append(action)
 
         if self.__run_mode == RunMode.unknown:
             raise RuntimeError("I was unable to figure out how your running your bot..")
-
-        print(self._events)
 
     def parse_for_possible_event_or_command(
         self, cst: libcst.FunctionDef
