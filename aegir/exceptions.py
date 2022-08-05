@@ -13,7 +13,3 @@ class AegirException(Exception):
 
 class InvalidDirPath(AegirException):
     """The given starting path does not exist."""
-
-
-class PlainAsyncFunc(AegirException):
-    """Given an AST for a plain async def function."""

@@ -1,196 +1,110 @@
-import ast
 from pathlib import Path
-from typing import List, Union, Set, Dict
+from typing import List, Optional, Union, cast
 
-from aegir.cogs.cog import Cog
-from aegir.command import Command
-from aegir.event import Event
-from aegir.exceptions import InvalidDirPath, PlainAsyncFunc
-from aegir.task import Task, BeforeLoop, AfterLoop
+import libcst
+from libcst import BaseExpression
+
+from aegir.bot_items import MainFile
+from aegir.bot_items.command import Command
+from aegir.bot_items.event import Event
+from aegir.exceptions import InvalidDirPath
+from aegir.util import Import, ImportFrom, ImportEntry
 
 
 class Aegir:
-    def __init__(self, dir_path: str, subclass_name: str = ""):
-        """
-        Parameters
-        ----------
-        dir_path
-        subclass_name: str
-            What your bot subclass is called
-        """
-        self._dir_path: Path = Path(dir_path).absolute()
+    def __init__(
+        self,
+        dir_path: Union[str, Path],
+        cog_directory_path: Optional[Path] = None,
+        *,
+        bot_variable: str,
+    ):
+        if not isinstance(dir_path, Path):
+            dir_path = Path(dir_path)
 
-        self.has_imported_nextcord: bool = False
-        self.has_imported_nextcord_commands: bool = False
-        self._cogs: List[Cog] = []
-        self._instance_name: str = ""
-        self._main_file: List[Event, Command, Task] = []
-        self._task_hooks: Dict[str, List[Union[BeforeLoop, AfterLoop]]] = {}
+        self._main_file_path: Path = dir_path.absolute()
+        self._cog_directory_path: Optional[Path] = cog_directory_path
 
-        self._possible_bot_classes: Set = {"Bot", "Client"}
-        if subclass_name:
-            self._possible_bot_classes.add(subclass_name)
+        self._main_file: Optional[MainFile] = None
+        self._bot_variable: str = bot_variable
 
-        if not self._dir_path.exists():
+        if not self._main_file_path.exists():
             raise InvalidDirPath
 
         self.has_been_converted: bool = False
 
-    def __repr__(self):
-        return (
-            f"<Aegir, instance_name={self._instance_name}, "
-            f"has_imported_nextcord={self.has_imported_nextcord}, "
-            f"has_imported_nextcord_commands={self.has_imported_nextcord_commands}, "
-            f"main_file={self._main_file}, cogs={self._cogs}>"
-        )
-
-    @property
-    def events(self) -> List[Event]:
-        return [i for i in self._main_file if isinstance(i, Event)]
-
-    @property
-    def commands(self) -> List[Command]:
-        return [i for i in self._main_file if isinstance(i, Command)]
-
-    @property
-    def tasks(self) -> List[Task]:
-        return [i for i in self._main_file if isinstance(i, Task)]
-
     @staticmethod
-    def as_ast(file_path: Path) -> ast.Module:
-        """Parse a given file"""
+    def as_cst(file_path: Path) -> libcst.Module:
+        """Parse a given file."""
         source = file_path.read_text()
-        tree = ast.parse(source)
+        tree = libcst.parse_module(source)
         return tree
 
-    @staticmethod
-    def as_attr_or_name(_ast: Union[ast.Attribute, ast.Name]) -> str:
-        if isinstance(_ast, ast.Name):
-            return _ast.id
-        elif isinstance(_ast, ast.Attribute):
-            return _ast.attr
+    def parse_out_import(self, cst: libcst.Import) -> Import:
+        """Given an Import return the imported module name"""
+        entries: List[ImportEntry] = []
+        for item in cst.names:
+            entries.append(ImportEntry(cst=item, item_imported=item.name.value))
 
-        raise NotImplementedError
+        all_imports = Import(cst=cst, imports=entries)
+        return all_imports
 
-    def as_command_or_event(
-        self, _ast: ast.AsyncFunctionDef
-    ) -> Union[Command, Event, Task, BeforeLoop, AfterLoop]:
-        if not _ast.decorator_list:
-            raise PlainAsyncFunc
+    def parse_out_import_from(self, cst: libcst.ImportFrom) -> ImportFrom:
+        import_path = self.recursive_attribute_resolution(cst.module, "")
 
-        for i, decor in enumerate(_ast.decorator_list):
-            if isinstance(decor, ast.Attribute):
-                func_name = self.as_attr_or_name(decor)
-            else:
-                func_name = self.as_attr_or_name(decor.func)  # type: ignore
+        entries: List[ImportEntry] = []
+        for item in cst.names:
+            entries.append(ImportEntry(cst=item, item_imported=item.name.value))
 
-            if func_name == "event":
-                obj = Event
-            elif func_name == "command":
-                obj = Command
-            elif func_name == "loop":
-                obj = Task
-            elif func_name == "before_loop":
-                return BeforeLoop.from_ast(_ast, decor)
-            elif func_name == "after_loop":
-                return AfterLoop.from_ast(_ast, decor)
-            # TODO Handle both command error and task error
-            else:
-                continue
+        return ImportFrom(cst=cst, from_module=import_path, items_imported=entries)
 
-            _ast.decorator_list.pop(i)
-            return obj.from_ast(_ast)
+    def recursive_attribute_resolution(
+        self, cst: libcst.Attribute, imported_from: str
+    ) -> str:
+        if isinstance(cst, libcst.Call):
+            imported_from = self.recursive_attribute_resolution(cst.func, imported_from)  # type: ignore
 
-            # TODO before_invoke, after_invoke
+        elif isinstance(cst.value, libcst.Attribute):
+            # Recurse till Attr value is the base module, I.e. Nextcord
+            imported_from = self.recursive_attribute_resolution(
+                cst.value, imported_from
+            )
 
-        raise NotImplementedError
+        else:
+            # This should be the base package name now
+            if isinstance(cst.value, libcst.Name):
+                # Type check guard
+                imported_from = cst.value.value
 
-    @staticmethod
-    def resolve_imported(_ast: Union[ast.Import, ast.ImportFrom]) -> str:
-        """Given an ast, return the thing imported"""
-        return _ast.names[0].name
+        if isinstance(cst, libcst.Name):
+            imported_from = (
+                f"{imported_from}.{cst.value}" if imported_from else cst.value
+            )
+        else:
+            if not isinstance(cst, libcst.Call):
+                imported_from = (
+                    f"{imported_from}.{cst.attr.value}"
+                    if imported_from
+                    else cst.attr.value
+                )
 
-    def parse_ast(self, _ast):
-        if hasattr(_ast, "__iter__"):
-            for new_ast in _ast:
-                self.parse_ast(new_ast)
-
-        if isinstance(_ast, (ast.Import, ast.ImportFrom)):
-            imported = self.resolve_imported(_ast)
-            if imported == "nextcord":
-                self.has_imported_nextcord = True
-
-            elif imported == "commands":
-                self.has_imported_nextcord_commands = True
-
-        elif isinstance(_ast, ast.If):
-            # __name__ == "__main__"
-            self.parse_ast(_ast.body)
-
-        elif isinstance(_ast, ast.Assign):
-            var_name = self.as_attr_or_name(_ast.targets[0])  # type: ignore
-            if not isinstance(_ast.value, ast.Call):
-                # Don't need constants n such
-                return
-
-            value_func = _ast.value.func
-
-            value = self.as_attr_or_name(value_func)  # type: ignore
-
-            if value in self._possible_bot_classes:
-                self._instance_name = var_name
-
-        elif isinstance(_ast, ast.AsyncFunctionDef):
-            try:
-                event_or_command = self.as_command_or_event(_ast)
-            except PlainAsyncFunc:
-                # async def main():
-                self.parse_ast(_ast.body)
-                return
-            except NotImplementedError:
-                return
-
-            if isinstance(event_or_command, (BeforeLoop, AfterLoop)):
-                try:
-                    self._task_hooks[event_or_command.associated_task].append(
-                        event_or_command
-                    )
-                except KeyError:
-                    self._task_hooks[event_or_command.associated_task] = [
-                        event_or_command
-                    ]
-            else:
-                self._main_file.append(event_or_command)
-
-    def hook_tasks(self):
-        """Takes BeforeLoop's and AfterLoop's and
-        hooks them into the relevant tasks.
-        """
-        for item in self._main_file:
-            if not isinstance(item, Task):
-                continue
-
-            task_name = item.task_name
-            try:
-                loops = self._task_hooks[task_name]
-            except KeyError:
-                continue
-
-            assert len(loops) in {0, 1, 2}
-
-            for invoke in loops:
-                if isinstance(invoke, BeforeLoop):
-                    item.before_loop = invoke
-                else:
-                    item.after_loop = invoke
+        return imported_from
 
     def convert(self):
-        for file in self._dir_path.glob("**/*.py"):
-            ast_module = self.as_ast(file)
-            for _ast in ast_module.body:
-                self.parse_ast(_ast)
+        # Handle main file first
+        self._main_file = MainFile(
+            self._main_file_path,
+            self._cog_directory_path,
+            backref=self,
+            bot_variable=self._bot_variable,
+        )
+        self._main_file.convert()
 
-        self.hook_tasks()
+        # for file in self._dir_path.glob("**/*.py"):
+        #     ast_module = self.as_ast(file)
+        #     for _ast in ast_module.body:
+        #         self.parse_ast(_ast)
+
         self.has_been_converted = True
 
         print(repr(self))

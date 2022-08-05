@@ -1,4 +1,4 @@
-import asyncio
+from nextcord.ext import commands, menus
 import io
 import os
 import re
@@ -64,7 +64,7 @@ async def main():
     # This basically ONLY matches a string that only consists of a mention
     mention = re.compile(r"^<@!?(?P<id>\d+)>$")
 
-    @bot.event
+    @bot.listen
     async def on_ready():
         await bot.change_presence(activity=nextcord.Game(name="py.help"))
 
@@ -237,5 +237,4 @@ async def main():
         await bot.start(token)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())

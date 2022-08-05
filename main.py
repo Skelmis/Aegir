@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from aegir import Aegir
 
-Aegir("test", "Pyro").convert()
+Aegir(Path("test/main.py"), bot_variable="bot").convert()
