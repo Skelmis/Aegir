@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Optional, TYPE_CHECKING, List, Union, cast
+from typing import Union, cast, Optional, Type, TYPE_CHECKING
 
 import libcst
 
-from aegir.bot_items import Command, Event, Decorator, Listener
-from aegir.util import RunMode, ImportFrom, Import, DecoratorType, ActionType
+from aegir import ParsedData
+from aegir.bot_items import Event, Listener, Command, Decorator
+from aegir.util import RunMode, ImportFrom, Import, ActionType, DecoratorType
 
 if TYPE_CHECKING:
     from aegir import Aegir
@@ -15,42 +15,32 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class MainFile:
+class SourceFile:
+    """Parse a piece of standalone code."""
+
     def __init__(
         self,
-        me: Path,
-        cog_path: Optional[Path] = None,
+        source: str,
         *,
-        backref: Aegir,
-        bot_variable: str,
+        backref: Union[Aegir, Type[Aegir]],
+        bot_variable: Optional[str] = None,
     ):
-        self._me: Path = me
-        self._cog_path: Optional[Path] = cog_path
-        self._backref: Aegir = backref
-        self._bot_variable: str = bot_variable
-        self.events: List[Event, Listener] = []
-        self.commands: List[Command] = []
-
-        self.file_cst: Optional[libcst.Module] = None
-        self.__run_mode: RunMode = RunMode.unknown
-        # What asyncio.run calls if applicable
+        self._source: str = source
+        self.commands: list[Command] = []
         self.__entry_func: Optional[str] = None
-        self.__imports: List[Union[Import, ImportFrom]] = []
+        self.__run_mode: RunMode = RunMode.unknown
+        self.file_cst: Optional[libcst.Module] = None
+        self.events: list[Union[Event, Listener]] = []
+        self._bot_variable: str = bot_variable or ""
+        self._backref: Union[Aegir, Type[Aegir]] = backref
+        self.__imports: list[Union[Import, ImportFrom]] = []
 
-    def convert(self) -> None:
-        """In place conversion"""
-        self.file_cst = self._backref.as_cst(self._me)
+    def convert(self) -> ParsedData:
+        self.file_cst = self._backref.as_cst(self._source)
         if self.__run_mode == RunMode.unknown:
-            self.parse_run_mode(self.file_cst.body)  # type: ignore
-
-        if self.__run_mode == RunMode.unknown:
-            log.debug(
-                "Code does not appear to be an entire file, "
-                "parsing as if just 1 item"
-            )
             self.__run_mode = RunMode.bot_run
 
-        where_are_things_defined: List = self.file_cst.body  # type: ignore
+        where_are_things_defined: list = self.file_cst.body  # type: ignore
         if self.__run_mode == RunMode.asyncio_run:
             # We need to find that function it runs
             # because everything will be defined there
@@ -105,6 +95,15 @@ class MainFile:
                 elif isinstance(action, (Event, Listener)):
                     self.events.append(action)
 
+        errors = []
+        for event in self.events:
+            errors.extend(event.errors)
+
+        for command in self.commands:
+            errors.extend(command.errors)
+
+        return ParsedData(errors=errors, commands=self.commands, events=self.events)
+
     def parse_for_possible_event_or_command(
         self, cst: libcst.FunctionDef
     ) -> Union[Command, Event, None]:
@@ -117,7 +116,7 @@ class MainFile:
             return
 
         action_type: ActionType = ActionType.UNKNOWN
-        decorators: List[Decorator] = []
+        decorators: list[Decorator] = []
         cst_decorators: List[libcst.Decorator] = cst.decorators  # type: ignore
         for cst_decor in cst_decorators:
             decor_name = self._backref.recursive_attribute_resolution(
@@ -176,7 +175,7 @@ class MainFile:
                 cst=cst,
             )
 
-    def parse_run_mode(self, possible_csts: List[libcst.SimpleStatementLine]) -> None:
+    def parse_run_mode(self, possible_csts: list[libcst.SimpleStatementLine]) -> None:
         for line in possible_csts:
             try:
                 line_doing = line.body[0].value  # type: ignore

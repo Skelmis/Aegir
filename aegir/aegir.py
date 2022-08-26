@@ -4,7 +4,7 @@ from typing import List, Optional, Union, cast
 import libcst
 from libcst import BaseExpression
 
-from aegir import FormatError
+from aegir import FormatError, ParsedData, SourceFile
 from aegir.bot_items import MainFile
 from aegir.bot_items.command import Command
 from aegir.bot_items.event import Event
@@ -35,9 +35,12 @@ class Aegir:
         self.has_been_converted: bool = False
 
     @staticmethod
-    def as_cst(file_path: Path) -> libcst.Module:
+    def as_cst(file_path: Union[Path, str]) -> libcst.Module:
         """Parse a given file."""
-        source = file_path.read_text()
+        if isinstance(file_path, Path):
+            source = file_path.read_text()
+        else:
+            source = file_path
         tree = libcst.parse_module(source)
         return tree
 
@@ -51,8 +54,9 @@ class Aegir:
         all_imports = Import(cst=cst, imports=entries)
         return all_imports
 
-    def parse_out_import_from(self, cst: libcst.ImportFrom) -> ImportFrom:
-        import_path = self.recursive_attribute_resolution(cst.module, "")
+    @classmethod
+    def parse_out_import_from(cls, cst: libcst.ImportFrom) -> ImportFrom:
+        import_path = cls.recursive_attribute_resolution(cst.module, "")
 
         entries: List[ImportEntry] = []
         for item in cst.names:
@@ -60,17 +64,16 @@ class Aegir:
 
         return ImportFrom(cst=cst, from_module=import_path, items_imported=entries)
 
+    @classmethod
     def recursive_attribute_resolution(
-        self, cst: libcst.Attribute, imported_from: str
+        cls, cst: libcst.Attribute, imported_from: str
     ) -> str:
         if isinstance(cst, libcst.Call):
-            imported_from = self.recursive_attribute_resolution(cst.func, imported_from)  # type: ignore
+            imported_from = cls.recursive_attribute_resolution(cst.func, imported_from)  # type: ignore
 
         elif isinstance(cst.value, libcst.Attribute):
             # Recurse till Attr value is the base module, I.e. Nextcord
-            imported_from = self.recursive_attribute_resolution(
-                cst.value, imported_from
-            )
+            imported_from = cls.recursive_attribute_resolution(cst.value, imported_from)
 
         else:
             # This should be the base package name now
@@ -108,6 +111,11 @@ class Aegir:
         #         self.parse_ast(_ast)
 
         self.has_been_converted = True
+
+    @classmethod
+    def convert_source(cls, source: str) -> ParsedData:
+        source = SourceFile(source, backref=cls)
+        return source.convert()
 
     @property
     def errors(self) -> List[FormatError]:

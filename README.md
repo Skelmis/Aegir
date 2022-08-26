@@ -8,3 +8,5 @@ Aegir (Pronounced a-gur) is an auto-migration tool for migrating nextcord bots u
 
 - `event` decorators being called
 - `listen` decorators not being called
+
+Runs on Python 3.10.

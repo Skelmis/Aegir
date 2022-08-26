@@ -1,0 +1,8 @@
+certifi==2022.6.15
+charset-normalizer==2.1.0
+idna==3.3
+libcst==0.4.7
+mypy-extensions==0.4.3
+PyYAML==6.0
+typing-inspect==0.7.1
+typing_extensions==4.3.0
